@@ -1,0 +1,79 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """A sample USD layer to exercise the Notepad++ syntax highlighter.
+
+    This is a multi-line triple-quoted doc string: it should stay one color
+    across every line, including stray quotes like " and ' in the middle,
+    and only end at the closing triple quote.
+    """
+    metersPerUnit = 0.01
+    upAxis = "Y"
+    startTimeCode = 1
+    endTimeCode = 96
+)
+
+# A class used as an inherit target ("Klass" / abstract prim).
+class "_class_Planet"
+{
+    bool hasLife = False
+    token kind = "model"
+}
+
+def Xform "World" (
+    kind = "assembly"
+)
+{
+    def Xform "Earth" (
+        prepend references = @./planet.usda@</Planet>
+        prepend inherits = </_class_Planet>
+        variants = {
+            string atmosphere = "thick"
+        }
+    )
+    {
+        # Transform values (namespaced property names: xformOp:, primvars:).
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOp:order = ["xformOp:translate"]
+
+        bool hasLife = True
+        color3f primvars:displayColor = [(0.1, 0.3, 0.8)]
+        custom string note = 'Mostly harmless.'
+        custom double scientific = -1.6e-19
+
+        def Mesh "Surface"
+        {
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            point3f[] points = [(-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1)]
+            rel material:binding = </World/Looks/OceanMat>
+        }
+    }
+
+    def Scope "Looks"
+    {
+        def Material "OceanMat"
+        {
+            token outputs:surface.connect = </World/Looks/OceanMat/PBR.outputs:surface>
+
+            def Shader "PBR" (
+                doc = '''single-quoted triple doc string'''
+            )
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                # Triple-@ asset path (used when a path itself contains '@').
+                asset inputs:diffuseTex = @@@./textures/ocean@v2.exr@@@
+                color3f inputs:diffuseColor = (0.0, 0.2, 0.6)
+                float inputs:roughness = 0.4
+                float inputs:metallic = 0
+                token outputs:surface
+            }
+        }
+    }
+
+    over "Earth"
+    {
+        # Sparse override layered on top of the def above.
+        double radius = 6371000
+    }
+}

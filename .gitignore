@@ -1,0 +1,9 @@
+# Generated at install time by install.ps1 -BinaryViewer (machine-specific Python path)
+OpenUSD_view.cfg
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local Claude Code settings
+.claude/settings.local.json
