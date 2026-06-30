@@ -1,0 +1,18 @@
+# Python dependencies for the OPTIONAL binary-USD (.usdc) editing feature only.
+#
+# The core plugin -- syntax highlighting, folding, and autocompletion for .usda --
+# needs NOTHING from pip. It is just XML + PowerShell.
+#
+# Install these only if you want to open/edit binary USD crates (.usdc):
+#     pip install -r requirements.txt
+# or let the installer do it for you:
+#     install.ps1 -BinaryViewer
+#
+# Requires Python 3.9-3.14 (the range usd-core supports).
+#
+# NOTE: the binary-crate feature ALSO requires the "PythonScript" Notepad++
+# plugin. That is a Notepad++ plugin (install via Plugins > Plugins Admin), not a
+# pip package, so it cannot be listed here.
+
+# Official OpenUSD build published by Pixar (provides the `pxr` Python libraries).
+usd-core

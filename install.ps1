@@ -11,8 +11,9 @@
       hook and registers it in the user startup.py (so ASCII .usd files get the
       OpenUSD language while binary crate files are left alone).
     - With -BinaryViewer, also `pip install`s the official 'usd-core' package and
-      enables read-only viewing of binary USD (crate) files: opening one shows its
-      ASCII conversion. Needs the PythonScript plugin and a Python 3.9-3.14.
+      enables editing of binary USD (crate) files: opening a .usdc converts it to a
+      temp .usda you edit, and saving converts it back to the crate (only if it
+      parses). Needs the PythonScript plugin and a Python 3.9-3.14.
 
     Close all Notepad++ windows before running, then reopen.
 
@@ -21,7 +22,7 @@
     Needs Windows Developer Mode or an elevated shell.
 
 .PARAMETER BinaryViewer
-    Install/enable read-only binary-USD viewing (runs `pip install usd-core`).
+    Install/enable binary-USD (crate) round-trip editing (runs `pip install usd-core`).
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\install.ps1
@@ -112,7 +113,7 @@ if (-not $nppDir) {
     }
 }
 
-# --- 4. Optional PythonScript hook (.usd auto-detect + binary viewer) -----
+# --- 4. Optional PythonScript hook (.usd auto-detect + crate editing) -----
 $psConfigDir   = Join-Path $env:APPDATA 'Notepad++\plugins\Config\PythonScript'
 $psUserScripts = Join-Path $psConfigDir 'scripts'
 $psInstalled = (Test-Path $psConfigDir) -or
@@ -122,7 +123,7 @@ $psInstalled = (Test-Path $psConfigDir) -or
 if (-not $psInstalled) {
     Write-Host "[skip] PythonScript not detected -> .usd auto-detect not configured." -ForegroundColor DarkGray
     Write-Host "       (Install it via Plugins > Plugins Admin, then re-run. See README.)" -ForegroundColor DarkGray
-    if ($BinaryViewer) { Write-Warning "-BinaryViewer needs the PythonScript plugin; skipping binary viewer." }
+    if ($BinaryViewer) { Write-Warning "-BinaryViewer needs the PythonScript plugin; skipping crate editing." }
 } else {
     if (-not (Test-Path $psUserScripts)) { New-Item -ItemType Directory -Force -Path $psUserScripts | Out-Null }
     $hookDst = Join-Path $psUserScripts 'OpenUSD_usd_autodetect.py'
@@ -155,7 +156,7 @@ if (-not $psInstalled) {
         Write-Host "      ONE-TIME: set PythonScript Initialisation to ATSTARTUP" -ForegroundColor Yellow
         Write-Host "      (Plugins > PythonScript > Configuration...) so startup.py runs on launch." -ForegroundColor Yellow
 
-        # --- 4b. Binary viewer: pip install usd-core + write cfg ----------
+        # --- 4b. Crate editing: pip install usd-core + write cfg ----------
         $cfg = Join-Path $psUserScripts 'OpenUSD_view.cfg'
         if ($BinaryViewer) {
             $python = $null
@@ -166,26 +167,31 @@ if (-not $psInstalled) {
                 if ($pyl) { try { $python = (& py -3 -c "import sys;print(sys.executable)").Trim() } catch {} }
             }
             if (-not $python) {
-                Write-Warning "No Python found on PATH; cannot enable the binary viewer. Install Python 3.9-3.14 and re-run."
+                Write-Warning "No Python found on PATH; cannot enable the crate editing. Install Python 3.9-3.14 and re-run."
             } else {
                 $ver = (& $python -c "import sys;print('%d.%d'%sys.version_info[:2])").Trim()
                 $vp  = $ver.Split('.'); $maj=[int]$vp[0]; $min=[int]$vp[1]
                 if ($maj -ne 3 -or $min -lt 9 -or $min -gt 14) {
-                    Write-Warning "Python $ver is outside usd-core's supported range (3.9-3.14). Binary viewer not enabled."
+                    Write-Warning "Python $ver is outside usd-core's supported range (3.9-3.14). Crate editing not enabled."
                 } else {
                     Write-Host "[..] Installing 'usd-core' into $python (this can take a minute)..." -ForegroundColor Cyan
-                    & $python -m pip install --upgrade usd-core
+                    $reqs = Join-Path $here 'requirements.txt'
+                    if (Test-Path $reqs) {
+                        & $python -m pip install --upgrade -r $reqs
+                    } else {
+                        & $python -m pip install --upgrade usd-core
+                    }
                     & $python -c "import pxr" 2>$null
                     if ($LASTEXITCODE -eq 0) {
                         [System.IO.File]::WriteAllText($cfg, $python, $utf8NoBom)
-                        Write-Host "[ok] usd-core ready; binary viewer enabled -> $cfg" -ForegroundColor Green
+                        Write-Host "[ok] usd-core ready; crate editing enabled -> $cfg" -ForegroundColor Green
                     } else {
-                        Write-Warning "usd-core did not import after install; binary viewer not enabled."
+                        Write-Warning "usd-core did not import after install; crate editing not enabled."
                     }
                 }
             }
         } elseif (Test-Path $cfg) {
-            Write-Host "[info] Binary viewer already enabled ($cfg). Re-run with -BinaryViewer to update Python/usd-core." -ForegroundColor DarkGray
+            Write-Host "[info] Crate editing already enabled ($cfg). Re-run with -BinaryViewer to update Python/usd-core." -ForegroundColor DarkGray
         }
     } else {
         Write-Warning "Could not install the PythonScript hook to $psUserScripts."

@@ -90,32 +90,45 @@ text `.usd` from a binary one. The optional PythonScript hook
 that gap by reading the first 8 bytes of each opened `.usd`/`.usdc` file:
 
 - **ASCII** content → applies the OpenUSD language (highlighting).
-- **Binary** content (crate, starts with `PXR-USDC`) → left untouched by default,
-  or — if the binary viewer is enabled — converted to a **read-only** ASCII view.
+- **Binary** crate (starts with `PXR-USDC`) → left untouched by default, or — if
+  crate editing is enabled — round-tripped through a temporary `.usda` (below).
+
+### Editing binary crates (sidecar round-trip)
+
+With crate editing enabled, opening a `.usdc` (or binary `.usd`):
+
+1. converts the crate to a temporary `.usda` (under `%TEMP%\npp_openusd\`) and
+   opens **that** for you to edit like any text file;
+2. on **save**, converts the temp `.usda` back to the original `.usdc` — **only
+   if it parses cleanly**, so a typo can never overwrite your crate with garbage.
+
+A persistent map (`map.json`) links each temp back to its original, surviving
+restarts. The conversion uses [`usd-core`](https://pypi.org/project/usd-core/) —
+the **official OpenUSD build published by Pixar** on PyPI — via
+`Sdf.Layer.FindOrOpen(src).Export(dst)`.
 
 ### Enabling it
 
 1. Install **PythonScript** via `Plugins` → `Plugins Admin`.
-2. Run the installer. For the binary viewer, add `-BinaryViewer`:
+2. Run the installer with `-BinaryViewer`:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install.ps1 -BinaryViewer
    ```
-   This copies the hook, registers it in PythonScript's `startup.py`, and (with
-   `-BinaryViewer`) runs `pip install usd-core` and records the Python to use.
+   This copies the hook, registers it in PythonScript's `startup.py`, runs
+   `pip install -r requirements.txt` (i.e. `usd-core`), and records which Python
+   to use. (You can also install the Python dep yourself: `pip install -r
+   requirements.txt`.)
 3. **One-time:** `Plugins` → `PythonScript` → `Configuration…` → set
    *Initialisation* to **ATSTARTUP** so the hook loads on launch.
 4. Restart Notepad++.
 
-### About the binary viewer
+Notes / limitations:
 
-Reading a binary crate as text requires converting it first. The hook does this
-with [`usd-core`](https://pypi.org/project/usd-core/) — the **official OpenUSD
-build published by Pixar** on PyPI (the `pxr` Python libraries). The conversion
-is `Sdf.Layer.FindOrOpen(path).ExportToString()`, shown in a read-only tab.
-Notes:
-
-- The view is **read-only**; edits are not written back to the crate.
-- Needs a Python **3.9–3.14** on `PATH` (that is what `usd-core` supports).
+- The editable tab shows a path under `%TEMP%\npp_openusd\`, not the original
+  location.
+- Round-tripping through USD **drops inline `#` comments** and may normalise
+  ordering/formatting — this is how USD's data model works, not a plugin bug.
+- Needs a Python **3.9–3.14** on `PATH` (the range `usd-core` supports).
 - `usd-core` is core-only: no `usdcat`/`usdview`, just the libraries the hook needs.
 
 (Alternatively, just add `usd` to the `ext="…"` list in `OpenUSD.udl.xml` if you
@@ -158,7 +171,8 @@ catch are out of reach:
 | `install.ps1` | Installer for both files (`-Symlink` for live edit) | — |
 | `uninstall.ps1` | Removes the installed files/links | — |
 | `build-autocomplete.ps1` | Regenerates the autocompletion file from the UDL | — |
-| `scripts/OpenUSD_usd_autodetect.py` | Optional PythonScript hook: highlight ASCII `.usd`, view binary as read-only | `…\PythonScript\scripts\` |
+| `requirements.txt` | Python dep (`usd-core`) for the optional `.usdc` editing feature | (pip) |
+| `scripts/OpenUSD_usd_autodetect.py` | Optional PythonScript hook: highlight ASCII `.usd`, edit binary crates via sidecar `.usda` | `…\PythonScript\scripts\` |
 | `examples/sample.usda` | Demo file for verifying the highlighter | — |
 
 ## License

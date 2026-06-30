@@ -72,5 +72,12 @@ if (Test-Path $startup) {
     }
 }
 
+# 4. Sidecar temp files used for .usdc editing
+$sidecar = Join-Path $env:TEMP 'npp_openusd'
+if (Test-Path $sidecar) {
+    try { Remove-Item -Path $sidecar -Recurse -Force -ErrorAction Stop; Write-Host "[ok] removed sidecar temp: $sidecar" -ForegroundColor Green }
+    catch { Write-Warning "Could not remove $sidecar" }
+}
+
 Write-Host ""
 Write-Host "Done. Restart Notepad++." -ForegroundColor Cyan

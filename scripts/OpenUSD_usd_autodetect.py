@@ -1,31 +1,51 @@
 # -*- coding: utf-8 -*-
 # OpenUSD_usd_autodetect.py
 #
-# PythonScript hook for Notepad++. On opening a .usd / .usdc file it:
-#   * ASCII USD  -> applies the "OpenUSD" User Defined Language (highlighting)
-#   * binary USD (crate; starts with the magic bytes "PXR-USDC"):
-#       - if a Python with the official 'usd-core' (pxr) package is configured,
-#         converts the layer to ASCII and shows it in a READ-ONLY view
-#       - otherwise leaves the file untouched (no garbage coloring)
+# PythonScript hook for Notepad++ that gives .usd / .usdc files USD-aware editing:
 #
-# The Python used for conversion is configured by `install.ps1 -BinaryViewer`,
-# which writes its full path into  OpenUSD_view.cfg  beside this script. Without
-# that file (or without usd-core), binary viewing is simply disabled and the
-# rest still works.
+#   * ASCII USD (.usd whose content is text)  -> applies the "OpenUSD" UDL.
+#   * binary USD crate (.usd/.usdc starting with "PXR-USDC"):
+#       SIDECAR round-trip editing (requires usd-core, see install.ps1 -BinaryViewer):
+#         - on open  : converts the crate to a temp .usda and opens THAT to edit
+#         - on save  : converts the temp .usda back to the original .usdc, but ONLY
+#                      if it parses cleanly (a bad edit never overwrites the crate)
+#       If usd-core is not configured, the crate is left untouched.
 #
-# Requires the PythonScript plugin. See README for setup.
+# The Python used for conversion is recorded in OpenUSD_view.cfg beside this
+# script (written by install.ps1 -BinaryViewer).
+#
+# Caveats (USD facts, not bugs): round-tripping through USD drops inline '#'
+# comments and may normalise ordering/formatting. The temp tab shows a path under
+# %TEMP%\npp_openusd. Requires the PythonScript plugin.
+#
+# NOTE: the conversion logic is straightforward; the Notepad++ open/close
+# sequencing is the part most worth verifying on a real machine.
 
 import os
+import json
+import hashlib
+import tempfile
 import subprocess
 from Npp import notepad, editor, NOTIFICATION
 
 _UDL_NAME    = 'OpenUSD'
-_CRATE_MAGIC = b'PXR-USDC'        # first 8 bytes of a binary USD crate file
+_CRATE_MAGIC = b'PXR-USDC'
 _USD_EXTS    = ('.usd', '.usdc')
-_seen        = set()              # process each buffer once; respect manual overrides
+_seen_open   = set()      # crate paths already turned into a sidecar this session
 
-# Directory containing this script: set by the startup.py loader block, or
-# derived when the script is run directly from the PythonScript menu.
+# Convert in a fresh subprocess (extension decides the output format):
+#   crate -> .usda  (read)   and   .usda -> crate  (write)  use the same code.
+_CONV_CODE = (
+    "import sys\n"
+    "from pxr import Sdf\n"
+    "lyr = Sdf.Layer.FindOrOpen(sys.argv[1])\n"
+    "if not lyr:\n"
+    "    sys.stderr.write('cannot open/parse: ' + sys.argv[1]); sys.exit(3)\n"
+    "if not lyr.Export(sys.argv[2]):\n"
+    "    sys.stderr.write('export failed: ' + sys.argv[2]); sys.exit(4)\n"
+)
+
+# Directory of this script (set by the startup.py loader, or derived if run direct).
 try:
     _BASE = _HOOK_DIR
 except NameError:
@@ -35,8 +55,9 @@ except NameError:
         _BASE = ''
 
 
+# --- usd-core plumbing ----------------------------------------------------
 def _configured_python():
-    """Path to a Python that has usd-core, or None (binary view disabled)."""
+    """Path to a Python that has usd-core, or None (crate editing disabled)."""
     try:
         cfg = os.path.join(_BASE, 'OpenUSD_view.cfg')
         if os.path.isfile(cfg):
@@ -49,70 +70,145 @@ def _configured_python():
     return None
 
 
-def _convert_to_usda(python_exe, path):
-    """Convert a binary USD layer to ASCII via usd-core, or None on failure."""
-    code = ("import sys\n"
-            "from pxr import Sdf\n"
-            "lyr = Sdf.Layer.FindOrOpen(sys.argv[1])\n"
-            "sys.stdout.write(lyr.ExportToString() if lyr else '')\n")
+def _convert(python_exe, src, dst):
+    """Run src -> dst conversion. Returns (ok, stderr_text)."""
     startupinfo = None
     if os.name == 'nt':
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW   # no console flash
     try:
-        proc = subprocess.Popen([python_exe, '-c', code, path],
+        proc = subprocess.Popen([python_exe, '-c', _CONV_CODE, src, dst],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 startupinfo=startupinfo)
-        out, _err = proc.communicate()
-        if proc.returncode != 0 or not out:
-            return None
-        return out.decode('utf-8', 'replace')
+        _out, err = proc.communicate()
+        return proc.returncode == 0, err.decode('utf-8', 'replace')
+    except Exception as exc:
+        return False, str(exc)
+
+
+# --- temp + mapping (temp .usda  <->  original .usdc) ---------------------
+def _root():
+    d = os.path.join(tempfile.gettempdir(), 'npp_openusd')
+    try:
+        if not os.path.isdir(d):
+            os.makedirs(d)
+    except OSError:
+        pass
+    return d
+
+
+def _map_path():
+    return os.path.join(_root(), 'map.json')
+
+
+def _load_map():
+    try:
+        with open(_map_path()) as fh:
+            return json.load(fh)
     except Exception:
-        return None
+        return {}
 
 
-def _show_readonly(text, src_path):
-    notepad.new()
-    banner = ('# Read-only view of %s\n'
-              '# (binary USD crate converted to ASCII via usd-core)\n\n'
-              % os.path.basename(src_path))
-    editor.setText(banner + text)
-    editor.emptyUndoBuffer()
-    editor.setSavePoint()
-    notepad.runMenuCommand('Language', _UDL_NAME)
-    editor.setReadOnly(True)
+def _save_map(m):
+    try:
+        with open(_map_path(), 'w') as fh:
+            json.dump(m, fh)
+    except Exception:
+        pass
 
 
-def _handle(bufferID):
-    if bufferID in _seen:
+def _temp_for(original):
+    stem = os.path.splitext(os.path.basename(original))[0] or 'layer'
+    h = hashlib.md5(original.lower().encode('utf-8')).hexdigest()[:8]
+    sub = os.path.join(_root(), h)
+    try:
+        if not os.path.isdir(sub):
+            os.makedirs(sub)
+    except OSError:
+        pass
+    return os.path.join(sub, stem + '.usda')
+
+
+# --- actions --------------------------------------------------------------
+def _open_crate_as_text(original):
+    python_exe = _configured_python()
+    if not python_exe:
+        return                       # crate editing disabled -> leave the file alone
+
+    temp = _temp_for(original)
+    ok, err = _convert(python_exe, original, temp)
+    if not ok:
+        notepad.messageBox('Could not read USD crate:\n%s\n\n%s'
+                           % (original, err), 'OpenUSD')
         return
-    _seen.add(bufferID)
 
-    path = notepad.getBufferFilename(bufferID)
-    if not path or os.path.splitext(path)[1].lower() not in _USD_EXTS:
+    m = _load_map()
+    m[temp.lower()] = original
+    _save_map(m)
+
+    # Open the editable temp; then close (or lock) the binary original.
+    notepad.open(temp)
+    try:
+        notepad.activateFile(original)
+        notepad.close()
+    except Exception:
+        try:
+            notepad.activateFile(original)
+            editor.setReadOnly(True)     # fallback: at least prevent garbage saves
+        except Exception:
+            pass
+    notepad.activateFile(temp)
+
+
+def _write_back(temp_path):
+    m = _load_map()
+    original = m.get(temp_path.lower())
+    if not original:
         return
+    python_exe = _configured_python()
+    if not python_exe:
+        return
+    ok, err = _convert(python_exe, temp_path, original)
+    if not ok:
+        notepad.messageBox('NOT saved to .usdc (left unchanged) - the text did '
+                           'not parse:\n%s\n\n%s' % (original, err), 'OpenUSD')
+
+
+def _is_crate(path):
     try:
         with open(path, 'rb') as fh:
-            head = fh.read(8)
+            return fh.read(8).startswith(_CRATE_MAGIC)
     except (IOError, OSError):
-        return
+        return False
 
-    if head.startswith(_CRATE_MAGIC):
-        python_exe = _configured_python()
-        if not python_exe:
-            return                       # binary view disabled -> leave as-is
-        text = _convert_to_usda(python_exe, path)
-        if text:
-            _show_readonly(text, path)
-        return
 
-    # ASCII USD content -> highlight the active document.
-    notepad.runMenuCommand('Language', _UDL_NAME)
+# --- notifications --------------------------------------------------------
+def _on_file_opened(args):
+    path = notepad.getBufferFilename(args['bufferID'])
+    if not path or os.path.splitext(path)[1].lower() not in _USD_EXTS:
+        return
+    if path.lower() in _seen_open:
+        return
+    _seen_open.add(path.lower())
+    if _is_crate(path):
+        _open_crate_as_text(path)
 
 
 def _on_buffer_activated(args):
-    _handle(args['bufferID'])
+    # Highlight ASCII .usd (a .usda already maps via the UDL extension list).
+    path = notepad.getBufferFilename(args['bufferID'])
+    if not path or os.path.splitext(path)[1].lower() != '.usd':
+        return
+    if not _is_crate(path):
+        notepad.runMenuCommand('Language', _UDL_NAME)
 
 
+def _on_file_saved(args):
+    path = notepad.getBufferFilename(args['bufferID'])
+    if path:
+        _write_back(path)
+
+
+notepad.callback(_on_file_opened,      [NOTIFICATION.FILEOPENED])
 notepad.callback(_on_buffer_activated, [NOTIFICATION.BUFFERACTIVATED])
-_handle(notepad.getCurrentBufferID())
+notepad.callback(_on_file_saved,       [NOTIFICATION.FILESAVED])
